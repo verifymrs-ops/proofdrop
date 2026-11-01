@@ -58,6 +58,22 @@ function sanitizeDevice(input: unknown): ProofDevice {
 }
 
 export async function POST(request: Request) {
+  try {
+    return await createProof(request);
+  } catch (error) {
+    console.error("[api/proof] failed to anchor proof", error);
+    return NextResponse.json(
+      {
+        error:
+          "The anchoring service hit an unexpected error. Please retry in a moment.",
+        detail: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 },
+    );
+  }
+}
+
+async function createProof(request: Request) {
   let payload: IncomingPayload;
   try {
     payload = (await request.json()) as IncomingPayload;
