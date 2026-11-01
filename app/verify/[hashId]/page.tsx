@@ -5,6 +5,7 @@ import QRCode from "qrcode";
 import { readProof, isValidHashId } from "@/lib/store";
 import { verifyAnchor } from "@/lib/anchor";
 import { ReportView } from "@/components/ReportView";
+import { LocalReportFallback } from "@/components/LocalReportFallback";
 
 interface PageProps {
   params: Promise<{ hashId: string }>;
@@ -36,7 +37,7 @@ export default async function VerifyReportPage({ params }: PageProps) {
   if (!isValidHashId(hashId)) notFound();
 
   const record = await readProof(hashId);
-  if (!record) notFound();
+  if (!record) return <LocalReportFallback hashId={hashId} />;
 
   const headerList = await headers();
   const host = headerList.get("x-forwarded-host") ?? headerList.get("host") ?? "localhost:3000";

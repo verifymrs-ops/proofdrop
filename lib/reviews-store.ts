@@ -6,6 +6,7 @@ import type { Review, ReviewInput, ReviewStats } from "./reviews-types";
 const DATA_DIR = path.join(process.cwd(), ".data");
 const REVIEW_FILE = path.join(DATA_DIR, "reviews.json");
 const MAX_REVIEWS = 5000;
+const REDIS_KEY = "proofdrop:reviews";
 
 export const REVIEW_USE_CASES = [
   "Marketplace sale",
@@ -16,35 +17,134 @@ export const REVIEW_USE_CASES = [
   "Other",
 ] as const;
 
+interface MemoryReviews {
+  reviews: Review[] | null;
+  fsWritable: boolean | null;
+}
+
+const globalRef = globalThis as typeof globalThis & {
+  __proofdropReviews?: MemoryReviews;
+};
+
+const memory: MemoryReviews = (globalRef.__proofdropReviews ??= {
+  reviews: null,
+  fsWritable: null,
+});
+
+interface RedisConfig {
+  url: string;
+  token: string;
+}
+
+function redisConfig(): RedisConfig | null {
+  const url =
+    process.env.KV_REST_API_URL ??
+    process.env.UPSTASH_REDIS_REST_URL ??
+    process.env.PROOFDROP_REDIS_URL;
+  const token =
+    process.env.KV_REST_API_TOKEN ??
+    process.env.UPSTASH_REDIS_REST_TOKEN ??
+    process.env.PROOFDROP_REDIS_TOKEN;
+  if (!url || !token) return null;
+  return { url: url.replace(/\/$/, ""), token };
+}
+
+async function redisCommand<T = unknown>(command: string[]): Promise<T | null> {
+  const config = redisConfig();
+  if (!config) return null;
+  try {
+    const response = await fetch(config.url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${config.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(command),
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as { result?: T; error?: string };
+    if (payload.error) return null;
+    return payload.result ?? null;
+  } catch {
+    return null;
+  }
+}
+
 let writeQueue: Promise<void> = Promise.resolve();
 
 async function ensureDir(): Promise<void> {
   await fs.mkdir(DATA_DIR, { recursive: true });
 }
 
-async function readAll(): Promise<Review[]> {
+function parseReviews(raw: unknown): Review[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (item): item is Review =>
+      Boolean(item) &&
+      typeof item === "object" &&
+      typeof (item as Review).id === "string" &&
+      typeof (item as Review).rating === "number",
+  );
+}
+
+async function canUseFilesystem(): Promise<boolean> {
+  if (memory.fsWritable !== null) return memory.fsWritable;
   try {
-    const raw = await fs.readFile(REVIEW_FILE, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item): item is Review =>
-        Boolean(item) &&
-        typeof item === "object" &&
-        typeof (item as Review).id === "string" &&
-        typeof (item as Review).rating === "number",
-    );
+    await ensureDir();
+    memory.fsWritable = true;
   } catch {
-    return [];
+    memory.fsWritable = false;
   }
+  return memory.fsWritable;
+}
+
+async function readAll(): Promise<Review[]> {
+  const fromRedis = await redisCommand<string>(["GET", REDIS_KEY]);
+  if (fromRedis) {
+    try {
+      const parsed = parseReviews(JSON.parse(fromRedis));
+      memory.reviews = parsed;
+      return parsed;
+    } catch {
+      // fall through
+    }
+  }
+
+  if (await canUseFilesystem()) {
+    try {
+      const raw = await fs.readFile(REVIEW_FILE, "utf8");
+      const parsed = parseReviews(JSON.parse(raw) as unknown);
+      memory.reviews = parsed;
+      return parsed;
+    } catch {
+      // fall through to memory
+    }
+  }
+
+  return memory.reviews ?? [];
 }
 
 async function writeAll(reviews: Review[]): Promise<void> {
-  await ensureDir();
   const trimmed = reviews.slice(-MAX_REVIEWS);
-  const temp = `${REVIEW_FILE}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(temp, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
-  await fs.rename(temp, REVIEW_FILE);
+  memory.reviews = trimmed;
+
+  const stored = await redisCommand<string>([
+    "SET",
+    REDIS_KEY,
+    JSON.stringify(trimmed),
+  ]);
+  if (stored === "OK") return;
+
+  if (!(await canUseFilesystem())) return;
+
+  try {
+    const temp = `${REVIEW_FILE}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(temp, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
+    await fs.rename(temp, REVIEW_FILE);
+  } catch {
+    memory.fsWritable = false;
+  }
 }
 
 function sanitize(value: string | undefined, max: number): string | undefined {

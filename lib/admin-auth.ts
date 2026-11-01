@@ -39,8 +39,13 @@ export async function getAdminPassword(): Promise<string> {
     // generate below
   }
   const generated = `pd_${randomBytes(9).toString("base64url")}`;
-  await ensureDir();
-  await fs.writeFile(PASSWORD_FILE, generated, { mode: 0o600 });
+  try {
+    await ensureDir();
+    await fs.writeFile(PASSWORD_FILE, generated, { mode: 0o600 });
+  } catch {
+    // Read-only filesystem (e.g. Vercel). Keep a process-scoped password; for
+    // durable admin access set PROOFDROP_ADMIN_PASSWORD.
+  }
   cachedPassword = generated;
   return cachedPassword;
 }
@@ -62,8 +67,13 @@ async function getSecret(): Promise<string> {
     // generate below
   }
   const generated = randomBytes(32).toString("hex");
-  await ensureDir();
-  await fs.writeFile(SECRET_FILE, generated, { mode: 0o600 });
+  try {
+    await ensureDir();
+    await fs.writeFile(SECRET_FILE, generated, { mode: 0o600 });
+  } catch {
+    // Read-only filesystem (e.g. Vercel). Process-scoped secret; set
+    // PROOFDROP_ADMIN_SECRET for stable sessions across instances.
+  }
   cachedSecret = generated;
   return cachedSecret;
 }

@@ -5,6 +5,7 @@ import {
   readImageDimensions,
   sha256Hex,
 } from "./hash-client";
+import { stashProofRecord } from "./proof-cache";
 import type { CaptureMode, CreateProofResponse, ProofRecord } from "./types";
 
 export interface IngestResult {
@@ -64,17 +65,21 @@ export async function ingestFile(
   });
 
   if (!response.ok) {
-    let message = "Unable to anchor this proof. Please retry.";
+    let message = "The anchoring service is temporarily unavailable. Please retry.";
     try {
       const body = (await response.json()) as { error?: string };
       if (body?.error) message = body.error;
     } catch {
       // keep default
     }
+    if (response.status >= 500) {
+      message = `${message} If this keeps happening, download the file and retry.`;
+    }
     throw new Error(message);
   }
 
   const body = (await response.json()) as CreateProofResponse;
+  stashProofRecord(body.record);
   return { record: body.record, existing: body.existing, sha256 };
 }
 

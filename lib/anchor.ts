@@ -28,8 +28,13 @@ async function loadSecret(): Promise<string> {
     // fall through to generate
   }
   const generated = randomBytes(32).toString("hex");
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(SECRET_FILE, generated, { mode: 0o600 });
+  try {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    await fs.writeFile(SECRET_FILE, generated, { mode: 0o600 });
+  } catch {
+    // Read-only filesystem (e.g. Vercel). Fall back to a process-scoped secret
+    // so anchoring still works within this instance's lifetime.
+  }
   cachedSecret = generated;
   return cachedSecret;
 }

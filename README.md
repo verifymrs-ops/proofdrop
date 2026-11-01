@@ -52,6 +52,26 @@ If `PROOFDROP_ADMIN_PASSWORD` is not provided, read the generated password from
 `.data/admin-password` (file mode `0600`). Login is rate limited to 8 attempts
 per 10 minutes per client.
 
+### Serverless / Vercel deployment
+
+The app never fails a proof because of a read-only filesystem. Persistence is
+resolved in this order:
+
+1. **Redis REST** (recommended for production) — set `KV_REST_API_URL` and
+   `KV_REST_API_TOKEN` (Vercel KV / Upstash), or the equivalent
+   `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`.
+2. **Local filesystem** — `.data/` when the runtime is writable.
+3. **In-process memory** — always used as a cache so the creating instance can
+   serve the proof immediately.
+
+On a read-only serverless host, proofs are also cached in the visitor's browser
+(`localStorage`) so `/verify/<hashId>` still renders for the creator. For durable
+multi-instance storage, configure Redis REST. Always set
+`PROOFDROP_ANCHOR_SECRET`, `PROOFDROP_ADMIN_PASSWORD`, and
+`PROOFDROP_ADMIN_SECRET` in production so anchors and owner sessions stay stable
+across instances.
+
+
 ## Routes
 
 | Route | Purpose |
@@ -80,11 +100,12 @@ per 10 minutes per client.
 
 ## Reviews
 
-Reviews are stored in `.data/reviews.json` behind a serialized write queue (no
-database required). Only published reviews appear publicly; the owner dashboard
-shows hidden ones too. Feature requests are derived from review text by matching
-known feature keywords in `lib/reviews-store.ts`, so the dashboard always reflects
-what users actually asked for.
+Reviews are stored in `.data/reviews.json` behind a serialized write queue, with
+Redis REST and in-memory fallbacks for read-only serverless hosts (no database
+required). Only published reviews appear publicly; the owner dashboard shows
+hidden ones too. Feature requests are derived from review text by matching known
+feature keywords in `lib/reviews-store.ts`, so the dashboard always reflects what
+users actually asked for.
 
 
 ## Data model
