@@ -174,3 +174,10 @@
 *.lz
 *.lzma
 *.iso
+
+# ProofDrop runtime data
+.data/
+
+# Next.js build output
+**/.next/
+**/out/
